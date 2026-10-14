@@ -20,6 +20,8 @@ class BenchmarkResult:
     dtype: str
     batch_size: int
     input_size: int
+    model_params_m: float
+    device_memory_gb: float
     warmup_runs: int
     measured_runs: int
     mean_latency_ms: float
@@ -67,20 +69,29 @@ def peak_memory_mb(device: torch.device) -> float | None:
     return None
 
 
+def device_memory_gb(device: torch.device) -> float:
+    if device.type == "cuda":
+        props = torch.cuda.get_device_properties(device)
+        return props.total_memory / (1024 ** 3)
+    return 0.0
+
+
 def benchmark(model_name: str, device: torch.device, batch_size: int,
               input_size: int, warmup_runs: int, measured_runs: int) -> BenchmarkResult:
-    result_args = dict(model=model_name, device=str(device), dtype="float32",
-                       batch_size=batch_size, input_size=input_size,
-                       warmup_runs=warmup_runs, measured_runs=measured_runs)
     try:
         from transformers import AutoModel, AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModel.from_pretrained(model_name).eval().to(device)
+        params_m = sum(p.numel() for p in model.parameters()) / 1_000_000
         text = ["benchmark workload input"] * batch_size
         inputs = tokenizer(text, return_tensors="pt", padding=True,
                            truncation=True, max_length=input_size)
         inputs = {key: value.to(device) for key, value in inputs.items()}
+        common = dict(model=model_name, device=str(device), dtype="float32",
+                      batch_size=batch_size, input_size=input_size,
+                      model_params_m=params_m, device_memory_gb=device_memory_gb(device),
+                      warmup_runs=warmup_runs, measured_runs=measured_runs)
 
         with torch.inference_mode():
             for _ in range(warmup_runs):
@@ -98,17 +109,19 @@ def benchmark(model_name: str, device: torch.device, batch_size: int,
 
         values = np.asarray(timings, dtype=np.float64)
         mean_ms = float(values.mean())
-        return BenchmarkResult(**result_args,
-            mean_latency_ms=mean_ms,
+        return BenchmarkResult(**common, mean_latency_ms=mean_ms,
             p50_latency_ms=float(np.percentile(values, 50)),
             p95_latency_ms=float(np.percentile(values, 95)),
             throughput_samples_per_second=float(batch_size / (mean_ms / 1000)),
             peak_memory_mb=peak_memory_mb(device), status="success")
     except Exception as exc:
-        return BenchmarkResult(**result_args, mean_latency_ms=0.0,
-            p50_latency_ms=0.0, p95_latency_ms=0.0,
-            throughput_samples_per_second=0.0, peak_memory_mb=None,
-            status="error", error=f"{type(exc).__name__}: {exc}")
+        return BenchmarkResult(model=model_name, device=str(device), dtype="float32",
+            batch_size=batch_size, input_size=input_size, model_params_m=0.0,
+            device_memory_gb=device_memory_gb(device), warmup_runs=warmup_runs,
+            measured_runs=measured_runs, mean_latency_ms=0.0, p50_latency_ms=0.0,
+            p95_latency_ms=0.0, throughput_samples_per_second=0.0,
+            peak_memory_mb=None, status="error",
+            error=f"{type(exc).__name__}: {exc}")
 
 
 def main() -> None:
@@ -121,7 +134,6 @@ def main() -> None:
     parser.add_argument("--measured-runs", type=int, default=50)
     parser.add_argument("--output", type=Path, default=Path("data/raw/benchmark_results.jsonl"))
     args = parser.parse_args()
-
     device = select_device(args.device)
     result = benchmark(args.model, device, args.batch_size, args.input_size,
                        args.warmup_runs, args.measured_runs)
