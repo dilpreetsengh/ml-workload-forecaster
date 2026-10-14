@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ml-workload-forecaster"
+version = "0.1.0"
+description = "Measure and predict machine-learning workload performance across hardware backends."
+requires-python = ">=3.10"
+dependencies = ["torch>=2.2", "transformers>=4.40", "numpy>=1.26", "pandas>=2.0", "psutil>=5.9"]
+
+[project.optional-dependencies]
+modeling = ["scikit-learn>=1.4", "joblib>=1.3"]
+dashboard = ["streamlit>=1.35", "plotly>=5.20"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
